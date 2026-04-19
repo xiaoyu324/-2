@@ -1,30 +1,29 @@
 
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { BananaModel, AspectRatio, ImageResolution } from "../types";
 
-// Helper to ensure API Key is ready, especially for Pro models
-const getClient = async (model: BananaModel): Promise<GoogleGenAI> => {
-  if (model === BananaModel.NANO_BANANA_PRO || model === BananaModel.NANO_BANANA_2) {
-    if (window.aistudio) {
-      // Check for API key selection for Pro and 3.1 models
-      const hasKey = await window.aistudio.hasSelectedApiKey();
-      if (!hasKey) {
-        await window.aistudio.openSelectKey();
-      }
-    }
-  }
-  
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Vertex AI Config
+const PROJECT_ID = 'project-b8424127-b223-442e-b23';
+const LOCATION = 'us-central1';
+const API_KEY = import.meta.env.VITE_API_KEY;
+
+/**
+ * 获取 Vertex AI REST API 地址
+ */
+const getEndpointUrl = (modelId: string) => {
+  return `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${modelId}:generateContent?key=${API_KEY}`;
 };
 
-const extractImagesFromResponse = (response: any): string[] => {
+/**
+ * 从响应中提取生成的图像 (Base64)
+ */
+const extractImagesFromResponse = (data: any): string[] => {
   const images: string[] = [];
   
-  if (!response.candidates || response.candidates.length === 0) {
+  if (!data.candidates || data.candidates.length === 0) {
     return images;
   }
 
-  for (const candidate of response.candidates) {
+  for (const candidate of data.candidates) {
     if (candidate.content && candidate.content.parts) {
       for (const part of candidate.content.parts) {
         if (part.inlineData) {
@@ -36,6 +35,44 @@ const extractImagesFromResponse = (response: any): string[] => {
     }
   }
   return images;
+};
+
+/**
+ * 执行 Fetch 请求
+ */
+const callVertexAI = async (model: BananaModel, parts: any[], generationConfig: any = {}) => {
+  const url = getEndpointUrl(model);
+  
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: parts
+        }
+      ],
+      generationConfig: {
+        ...generationConfig
+      },
+      safetySettings: [
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error?.message || `API 请求失败: ${response.status}`);
+  }
+
+  return response.json();
 };
 
 interface EditImageParams {
@@ -56,7 +93,6 @@ export const editImageWithGemini = async ({
   quality = ImageResolution.RES_1K
 }: EditImageParams): Promise<string[]> => {
   try {
-    const ai = await getClient(model);
     const cleanImage = imageBase64.replace(/^data:image\/\w+;base64,/, "");
     
     const parts: any[] = [
@@ -88,7 +124,10 @@ export const editImageWithGemini = async ({
 
     parts.push({ text: finalPrompt });
 
-    const imageConfig: any = { numberOfImages: 1 };
+    // 映射原本 SDK 的 imageConfig 到 generationConfig
+    const generationConfig: any = { candidateCount: 1 };
+    
+    const imageConfig: any = {};
     if (aspectRatio !== AspectRatio.ORIGINAL) {
        imageConfig.aspectRatio = aspectRatio;
     }
@@ -96,24 +135,15 @@ export const editImageWithGemini = async ({
     if (model === BananaModel.NANO_BANANA_PRO || model === BananaModel.NANO_BANANA_2) {
        imageConfig.imageSize = (quality === ImageResolution.RES_4K && model === BananaModel.NANO_BANANA_PRO) ? ImageResolution.RES_2K : quality;
     }
+    
+    // 如果是生图专有参数，放入 imageConfig 子对象中
+    if (Object.keys(imageConfig).length > 0) {
+        generationConfig.imageConfig = imageConfig;
+    }
 
-    const config: any = {
-      imageConfig,
-      safetySettings: [
-        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-      ]
-    };
-
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: { parts },
-      config: config
-    });
-
+    const response = await callVertexAI(model, parts, generationConfig);
     return extractImagesFromResponse(response);
+    
   } catch (error: any) {
     console.error("Edit Image Error:", error);
     throw new Error(error.message || "图像编辑请求失败。");
@@ -122,7 +152,7 @@ export const editImageWithGemini = async ({
 
 interface RecreateImageParams {
   model: BananaModel;
-  referenceImageBase64?: string; // 改为可选
+  referenceImageBase64?: string;
   characterImageBase64?: string;
   prompt: string;
   textContent?: string;
@@ -144,7 +174,6 @@ export const recreateImageWithGemini = async ({
   quality
 }: RecreateImageParams): Promise<string[]> => {
   try {
-    const ai = await getClient(model);
     const parts: any[] = [];
     let instructions = "";
 
@@ -171,30 +200,20 @@ export const recreateImageWithGemini = async ({
 
     parts.push({ text: fullPrompt });
 
-    const imageConfig: any = { numberOfImages: 1 };
+    const imageConfig: any = {};
     if (aspectRatio !== AspectRatio.ORIGINAL) {
        imageConfig.aspectRatio = aspectRatio;
     }
-    if (model === BananaModel.NANO_BANANA_PRO || model === BananaModel.NANO_BANANA_2) {
-      imageConfig.imageSize = quality;
-    }
+    imageConfig.imageSize = quality;
 
-    const config: any = {
-      imageConfig,
-      safetySettings: [
-        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-      ]
+    const generationConfig: any = { 
+        candidateCount: 1,
+        imageConfig: imageConfig
     };
-    
+
+    // 并行请求以生成多张图
     const promises = Array.from({ length: numberOfImages }).map(() => 
-      ai.models.generateContent({
-        model: model,
-        contents: { parts },
-        config: config
-      })
+      callVertexAI(model, parts, generationConfig)
     );
 
     const responses = await Promise.all(promises);
