@@ -1,12 +1,11 @@
-
 export enum BananaModel {
-  NANO_BANANA = 'gemini-1.5-flash',
-  NANO_BANANA_2 = 'gemini-1.5-flash',
-  NANO_BANANA_PRO = 'gemini-1.5-pro',
+  NANO_BANANA = 'gemini-1.5-flash',       // 对应原来的 Nano Banana
+  NANO_BANANA_2 = 'gemini-3.1-flash-image-preview',     // 对应 Banana 2
+  NANO_BANANA_PRO = 'Gemini 3 Pro',     // 对应 Banana Pro
 }
 
 export enum AspectRatio {
-  ORIGINAL = 'ORIGINAL', // UI Helper, maps to closest ratio
+  ORIGINAL = 'ORIGINAL',
   SQUARE = '1:1',
   PORTRAIT_3_4 = '3:4',
   LANDSCAPE_4_3 = '4:3',
